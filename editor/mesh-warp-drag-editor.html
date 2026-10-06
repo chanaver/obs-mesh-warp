@@ -1,0 +1,1307 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mesh Warp Drag Editor</title>
+<style>
+  :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { margin: 0; background: #111318; color: #eef1f6; }
+  header { padding: 18px 22px 8px; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p { margin: 0; color: #aeb6c4; line-height: 1.5; }
+  main { display: grid; grid-template-columns: 300px 1fr; gap: 16px; padding: 14px 22px 22px; align-items: start; }
+  .panel, .stage-wrap { background: #1a1e26; border: 1px solid #2b3242; border-radius: 14px; }
+  .panel { padding: 16px; }
+  .stage-wrap { padding: 12px; }
+  label { display: block; font-size: 13px; color: #c8d0df; margin: 12px 0 6px; }
+  select, input[type="number"], input[type="text"], input[type="password"], button { width: 100%; box-sizing: border-box; border-radius: 9px; border: 1px solid #394256; background: #242a37; color: #eef1f6; padding: 9px 10px; font-size: 14px; }
+  button { cursor: pointer; margin-top: 9px; background: #2d4f9e; border-color: #3d66bd; font-weight: 650; }
+  button.secondary { background: #242a37; border-color: #394256; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #dbe2ee; font-size: 14px; }
+  .check input { width: auto; }
+  canvas { width: 100%; height: auto; display: block; background: #0c0e12; border-radius: 10px; touch-action: none; cursor: crosshair; }
+  .readout { margin-top: 10px; color: #c8d0df; font-size: 13px; min-height: 20px; }
+  .small { font-size: 12px; color: #98a2b3; line-height: 1.55; }
+  hr { border: 0; border-top: 1px solid #2b3242; margin: 16px 0; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mesh Warp Drag Editor</h1>
+  <p>Drag points to preview the warp live. When it looks right, download a shader file or connect to OBS.</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="row">
+      <div>
+        <label for="cols">Horizontal points</label>
+        <select id="cols">
+          <option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option>
+        </select>
+      </div>
+      <div>
+        <label for="rows">Vertical points</label>
+        <select id="rows">
+          <option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option>
+        </select>
+      </div>
+    </div>
+
+    <label for="imageFile">Test image</label>
+    <input id="imageFile" type="file" accept="image/*">
+
+    <label class="check"><input id="showGrid" type="checkbox" checked> Show grid</label>
+    <label class="check"><input id="smoothInterior" type="checkbox" checked> Auto-flatten interior from edges</label>
+    <label class="check"><input id="preventFold" type="checkbox" checked> Prevent fold-over</label>
+    <label class="check"><input id="snap" type="checkbox"> Snap to 0.01</label>
+
+    <hr>
+
+    <div class="small"><strong>OBS live link</strong><br>Enable the OBS WebSocket server, then drag points here and the OBS filter follows.</div>
+    <label for="obsUrl">OBS WebSocket URL</label>
+    <input id="obsUrl" type="text" value="ws://127.0.0.1:4455">
+    <label for="obsPassword">OBS WebSocket password</label>
+    <input id="obsPassword" type="password" autocomplete="off" placeholder="Leave blank if none">
+    <label for="obsSource">Source</label>
+    <select id="obsSource"></select>
+    <label for="obsFilter">Filter</label>
+    <select id="obsFilter"></select>
+    <label for="obsMode">Send mode</label>
+    <select id="obsMode" disabled>
+      <option value="flex" selected>Flex · single send format</option>
+    </select>
+    <div class="small">Load the Flex shader in OBS. The separate exact-shader format was removed to avoid mix-ups.</div>
+    <button id="obsRefresh" class="secondary">Auto-detect from OBS</button>
+    <div id="obsTarget" class="small">When connected, the source, filter, and grid are detected automatically.</div>
+    <label class="check"><input id="obsLive" type="checkbox" checked> Send while dragging</label>
+    <button id="obsConnect">Connect to OBS</button>
+    <button id="obsPush" class="secondary">Send current values to OBS</button>
+    <div id="obsStatus" class="small">OBS link idle</div>
+
+    <hr>
+
+    <label>Selected point</label>
+    <div id="pointName" class="small">Click a point.</div>
+    <div class="row">
+      <div>
+        <label for="pointX">X</label>
+        <input id="pointX" type="number" min="-0.5" max="1.5" step="0.001">
+      </div>
+      <div>
+        <label for="pointY">Y</label>
+        <input id="pointY" type="number" min="-0.5" max="1.5" step="0.001">
+      </div>
+    </div>
+
+    <button id="download">Download Flex shader</button>
+    <button id="presetSave" class="secondary">Save current JSON</button>
+    <button id="presetLoad" class="secondary">Load JSON</button>
+    <input id="presetFile" type="file" accept="application/json,.json" style="display:none">
+    <button id="copy" class="secondary">Copy point values</button>
+    <button id="smoothNow" class="secondary">Flatten interior</button>
+    <button id="flattenNow" class="secondary">Flatten to plane</button>
+    <button id="reset" class="secondary">Reset</button>
+
+    <hr>
+    <div class="small">
+      Coordinates match the OBS shader. (0,0) is top-left and (1,1) is bottom-right.
+      If points go outside 0-1, raise Extra pixels in the OBS filter so the image is not clipped.
+    </div>
+  </section>
+
+  <section class="stage-wrap">
+    <canvas id="stage" width="768" height="432"></canvas>
+    <div id="readout" class="readout"></div>
+  </section>
+</main>
+
+<script>
+const stage = document.getElementById('stage');
+const ctx = stage.getContext('2d', { willReadFrequently: true });
+const W = stage.width;
+const H = stage.height;
+const VIEW_MIN = -0.2;
+const VIEW_MAX = 1.2;
+const VIEW_RANGE = VIEW_MAX - VIEW_MIN;
+
+const colsEl = document.getElementById('cols');
+const rowsEl = document.getElementById('rows');
+const imageFileEl = document.getElementById('imageFile');
+const showGridEl = document.getElementById('showGrid');
+const smoothInteriorEl = document.getElementById('smoothInterior');
+const preventFoldEl = document.getElementById('preventFold');
+const snapEl = document.getElementById('snap');
+const pointNameEl = document.getElementById('pointName');
+const pointXEl = document.getElementById('pointX');
+const pointYEl = document.getElementById('pointY');
+const smoothNowEl = document.getElementById('smoothNow');
+const presetSaveEl = document.getElementById('presetSave');
+const presetLoadEl = document.getElementById('presetLoad');
+const presetFileEl = document.getElementById('presetFile');
+const flattenNowEl = document.getElementById('flattenNow');
+const readoutEl = document.getElementById('readout');
+const obsUrlEl = document.getElementById('obsUrl');
+const obsPasswordEl = document.getElementById('obsPassword');
+const obsSourceEl = document.getElementById('obsSource');
+const obsFilterEl = document.getElementById('obsFilter');
+const obsLiveEl = document.getElementById('obsLive');
+const obsConnectEl = document.getElementById('obsConnect');
+const obsPushEl = document.getElementById('obsPush');
+const obsRefreshEl = document.getElementById('obsRefresh');
+const obsModeEl = document.getElementById('obsMode');
+const obsStatusEl = document.getElementById('obsStatus');
+const obsTargetEl = document.getElementById('obsTarget');
+
+const srcCanvas = document.createElement('canvas');
+srcCanvas.width = 1280;
+srcCanvas.height = 720;
+const sctx = srcCanvas.getContext('2d', { willReadFrequently: true });
+let srcData = null;
+
+let cols = 4;
+let rows = 4;
+let pts = [];
+let selected = -1;
+let dragging = -1;
+let needsRender = false;
+let dragWarning = '';
+const frame = ctx.createImageData(W, H);
+const FLEX_SHADER_TEXT = "// Mesh Warp Flex for OBS ShaderFilter (exeldro obs-shaderfilter)\n// Grid Columns/Rows choose the working mesh density (2x2 to 6x6).\n// The 36 P00..P55 sliders are the master control lattice. Coordinates: (0,0)=top-left, (1,1)=bottom-right.\n// Tip: if points move outside 0..1, increase the filter's \"Extra pixels\" so the warped area is not clipped.\n\nuniform int Grid_Columns<\n    string label = \"Grid columns (points across)\";\n    string widget_type = \"select\";\n    string group = \"Grid size\";\n    int option_0_value = 2;\n    string option_0_label = \"2\";\n    int option_1_value = 3;\n    string option_1_label = \"3\";\n    int option_2_value = 4;\n    string option_2_label = \"4\";\n    int option_3_value = 5;\n    string option_3_label = \"5\";\n    int option_4_value = 6;\n    string option_4_label = \"6\";\n> = 4;\n\nuniform int Grid_Rows<\n    string label = \"Grid rows (points down)\";\n    string widget_type = \"select\";\n    string group = \"Grid size\";\n    int option_0_value = 2;\n    string option_0_label = \"2\";\n    int option_1_value = 3;\n    string option_1_label = \"3\";\n    int option_2_value = 4;\n    string option_2_label = \"4\";\n    int option_3_value = 5;\n    string option_3_label = \"5\";\n    int option_4_value = 6;\n    string option_4_label = \"6\";\n> = 4;\n\nuniform bool Show_Grid<\n    string label = \"Show grid\";\n    string group = \"Guide\";\n> = true;\n\nuniform float Grid_Opacity<\n    string label = \"Grid opacity\";\n    string widget_type = \"slider\";\n    string group = \"Guide\";\n    float minimum = 0.0;\n    float maximum = 1.0;\n    float step = 0.01;\n> = 0.85;\n\nuniform float Feather<\n    string label = \"Edge feather\";\n    string widget_type = \"slider\";\n    string group = \"Guide\";\n    float minimum = 0.0;\n    float maximum = 0.05;\n    float step = 0.0005;\n> = 0.0;\n\nuniform float P00_X< string label = \"P00 X\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P00_Y< string label = \"P00 Y\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P01_X< string label = \"P01 X\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P01_Y< string label = \"P01 Y\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P02_X< string label = \"P02 X\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P02_Y< string label = \"P02 Y\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P03_X< string label = \"P03 X\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P03_Y< string label = \"P03 Y\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P04_X< string label = \"P04 X\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P04_Y< string label = \"P04 Y\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P05_X< string label = \"P05 X\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P05_Y< string label = \"P05 Y\"; string widget_type = \"slider\"; string group = \"Master points row 0\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P10_X< string label = \"P10 X\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P10_Y< string label = \"P10 Y\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P11_X< string label = \"P11 X\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P11_Y< string label = \"P11 Y\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P12_X< string label = \"P12 X\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P12_Y< string label = \"P12 Y\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P13_X< string label = \"P13 X\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P13_Y< string label = \"P13 Y\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P14_X< string label = \"P14 X\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P14_Y< string label = \"P14 Y\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P15_X< string label = \"P15 X\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P15_Y< string label = \"P15 Y\"; string widget_type = \"slider\"; string group = \"Master points row 1\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P20_X< string label = \"P20 X\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P20_Y< string label = \"P20 Y\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P21_X< string label = \"P21 X\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P21_Y< string label = \"P21 Y\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P22_X< string label = \"P22 X\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P22_Y< string label = \"P22 Y\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P23_X< string label = \"P23 X\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P23_Y< string label = \"P23 Y\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P24_X< string label = \"P24 X\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P24_Y< string label = \"P24 Y\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P25_X< string label = \"P25 X\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P25_Y< string label = \"P25 Y\"; string widget_type = \"slider\"; string group = \"Master points row 2\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P30_X< string label = \"P30 X\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P30_Y< string label = \"P30 Y\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P31_X< string label = \"P31 X\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P31_Y< string label = \"P31 Y\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P32_X< string label = \"P32 X\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P32_Y< string label = \"P32 Y\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P33_X< string label = \"P33 X\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P33_Y< string label = \"P33 Y\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P34_X< string label = \"P34 X\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P34_Y< string label = \"P34 Y\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P35_X< string label = \"P35 X\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P35_Y< string label = \"P35 Y\"; string widget_type = \"slider\"; string group = \"Master points row 3\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P40_X< string label = \"P40 X\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P40_Y< string label = \"P40 Y\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P41_X< string label = \"P41 X\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P41_Y< string label = \"P41 Y\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P42_X< string label = \"P42 X\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P42_Y< string label = \"P42 Y\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P43_X< string label = \"P43 X\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P43_Y< string label = \"P43 Y\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P44_X< string label = \"P44 X\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P44_Y< string label = \"P44 Y\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P45_X< string label = \"P45 X\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P45_Y< string label = \"P45 Y\"; string widget_type = \"slider\"; string group = \"Master points row 4\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P50_X< string label = \"P50 X\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0;\nuniform float P50_Y< string label = \"P50 Y\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P51_X< string label = \"P51 X\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.2;\nuniform float P51_Y< string label = \"P51 Y\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P52_X< string label = \"P52 X\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.4;\nuniform float P52_Y< string label = \"P52 Y\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P53_X< string label = \"P53 X\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.6;\nuniform float P53_Y< string label = \"P53 Y\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P54_X< string label = \"P54 X\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 0.8;\nuniform float P54_Y< string label = \"P54 Y\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P55_X< string label = \"P55 X\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\nuniform float P55_Y< string label = \"P55 Y\"; string widget_type = \"slider\"; string group = \"Master points row 5\"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = 1;\n\nfloat segDist(float2 p, float2 a, float2 b)\n{\n    float2 pa = p - a;\n    float2 ba = b - a;\n    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.00000001), 0.0, 1.0);\n    return length(pa - ba * h);\n}\n\nfloat2 bilinearPoint(float2 d00, float2 d10, float2 d01, float2 d11, float s, float t)\n{\n    return lerp(lerp(d00, d10, s), lerp(d01, d11, s), t);\n}\n\n// Solve the inverse bilinear mapping with Newton iterations. This avoids the\n// quadratic-root selection that could drop pixels in the lower cells.\nbool bilinearInverse(float2 p, float2 d00, float2 d10, float2 d01, float2 d11, out float sOut, out float tOut)\n{\n    float2 b = d10 - d00;\n    float2 c = d01 - d00;\n    float2 d = d00 - d10 - d01 + d11;\n\n    float s = 0.5;\n    float t = 0.5;\n\n    for (int i = 0; i < 6; i++)\n    {\n        float2 q = bilinearPoint(d00, d10, d01, d11, s, t);\n        float2 f = q - p;\n        if (dot(f, f) < 0.00000001)\n        {\n            break;\n        }\n\n        float2 js = b + d * t;\n        float2 jt = c + d * s;\n        float det = js.x * jt.y - js.y * jt.x;\n        if (abs(det) < 0.00000001)\n        {\n            sOut = 0.0;\n            tOut = 0.0;\n            return false;\n        }\n\n        float ds = (jt.y * f.x - jt.x * f.y) / det;\n        float dt = (-js.y * f.x + js.x * f.y) / det;\n        s -= ds;\n        t -= dt;\n\n        if (s < -0.25 || s > 1.25 || t < -0.25 || t > 1.25)\n        {\n            sOut = 0.0;\n            tOut = 0.0;\n            return false;\n        }\n    }\n\n    float2 qFinal = bilinearPoint(d00, d10, d01, d11, s, t);\n    float2 fFinal = qFinal - p;\n    sOut = clamp(s, 0.0, 1.0);\n    tOut = clamp(t, 0.0, 1.0);\n    return (s >= -0.0001 && s <= 1.0001 && t >= -0.0001 && t <= 1.0001 && dot(fFinal, fFinal) < 0.0001);\n}\n\nfloat4 mainImage(VertData v_in) : TARGET\n{\n    float2 p = v_in.uv;\n    int cols = clamp(Grid_Columns, 2, 6);\n    int rows = clamp(Grid_Rows, 2, 6);\n\n    float2 pts[36];\n    pts[0] = float2(P00_X, P00_Y);\n    pts[1] = float2(P01_X, P01_Y);\n    pts[2] = float2(P02_X, P02_Y);\n    pts[3] = float2(P03_X, P03_Y);\n    pts[4] = float2(P04_X, P04_Y);\n    pts[5] = float2(P05_X, P05_Y);\n    pts[6] = float2(P10_X, P10_Y);\n    pts[7] = float2(P11_X, P11_Y);\n    pts[8] = float2(P12_X, P12_Y);\n    pts[9] = float2(P13_X, P13_Y);\n    pts[10] = float2(P14_X, P14_Y);\n    pts[11] = float2(P15_X, P15_Y);\n    pts[12] = float2(P20_X, P20_Y);\n    pts[13] = float2(P21_X, P21_Y);\n    pts[14] = float2(P22_X, P22_Y);\n    pts[15] = float2(P23_X, P23_Y);\n    pts[16] = float2(P24_X, P24_Y);\n    pts[17] = float2(P25_X, P25_Y);\n    pts[18] = float2(P30_X, P30_Y);\n    pts[19] = float2(P31_X, P31_Y);\n    pts[20] = float2(P32_X, P32_Y);\n    pts[21] = float2(P33_X, P33_Y);\n    pts[22] = float2(P34_X, P34_Y);\n    pts[23] = float2(P35_X, P35_Y);\n    pts[24] = float2(P40_X, P40_Y);\n    pts[25] = float2(P41_X, P41_Y);\n    pts[26] = float2(P42_X, P42_Y);\n    pts[27] = float2(P43_X, P43_Y);\n    pts[28] = float2(P44_X, P44_Y);\n    pts[29] = float2(P45_X, P45_Y);\n    pts[30] = float2(P50_X, P50_Y);\n    pts[31] = float2(P51_X, P51_Y);\n    pts[32] = float2(P52_X, P52_Y);\n    pts[33] = float2(P53_X, P53_Y);\n    pts[34] = float2(P54_X, P54_Y);\n    pts[35] = float2(P55_X, P55_Y);\n\n    // Build the active grid by sampling the 6x6 master lattice at the selected grid density.\n    float2 apt[36];\n    for (int ar = 0; ar < 6; ar++)\n    {\n        for (int ac = 0; ac < 6; ac++)\n        {\n            float2 ap = float2(float(ac) * 0.2, float(ar) * 0.2);\n            if (ac < cols && ar < rows)\n            {\n                float u = float(ac) / float(cols - 1);\n                float v = float(ar) / float(rows - 1);\n                float gx = u * 5.0;\n                float gy = v * 5.0;\n                int x0 = int(floor(gx));\n                int y0 = int(floor(gy));\n                int x1 = min(x0 + 1, 5);\n                int y1 = min(y0 + 1, 5);\n                float tx = gx - float(x0);\n                float ty = gy - float(y0);\n\n                if (x0 >= 5)\n                {\n                    x0 = 4;\n                    x1 = 5;\n                    tx = 1.0;\n                }\n                if (y0 >= 5)\n                {\n                    y0 = 4;\n                    y1 = 5;\n                    ty = 1.0;\n                }\n\n                float2 mp00 = pts[y0 * 6 + x0];\n                float2 mp10 = pts[y0 * 6 + x1];\n                float2 mp01 = pts[y1 * 6 + x0];\n                float2 mp11 = pts[y1 * 6 + x1];\n                ap = lerp(lerp(mp00, mp10, tx), lerp(mp01, mp11, tx), ty);\n            }\n            apt[ar * 6 + ac] = ap;\n        }\n    }\n\n    float2 src = float2(0.0, 0.0);\n    float edge = 1.0;\n    bool found = false;\n\n    for (int r = 0; r < 5; r++)\n    {\n        for (int c = 0; c < 5; c++)\n        {\n            if (!found && r < rows - 1 && c < cols - 1)\n            {\n                int i00 = r * 6 + c;\n                int i10 = i00 + 1;\n                int i01 = i00 + 6;\n                int i11 = i01 + 1;\n\n                float2 d00 = apt[i00];\n                float2 d10 = apt[i10];\n                float2 d01 = apt[i01];\n                float2 d11 = apt[i11];\n\n                float x0 = float(c) / float(cols - 1);\n                float x1 = float(c + 1) / float(cols - 1);\n                float y0 = float(r) / float(rows - 1);\n                float y1 = float(r + 1) / float(rows - 1);\n\n                float2 s00 = float2(x0, y0);\n                float2 s10 = float2(x1, y0);\n                float2 s01 = float2(x0, y1);\n                float2 s11 = float2(x1, y1);\n\n                float s;\n                float t;\n                if (!found && bilinearInverse(p, d00, d10, d01, d11, s, t))\n                {\n                    src = float2(lerp(x0, x1, s), lerp(y0, y1, t));\n                    edge = min(edge, min(min(s, t), min(1.0 - s, 1.0 - t)));\n                    found = true;\n                }\n            }\n        }\n    }\n\n    float4 col = float4(0.0, 0.0, 0.0, 0.0);\n    if (found)\n    {\n        col = image.SampleLevel(textureSampler, clamp(src, 0.0, 1.0), 0.0);\n        if (Feather > 0.00001)\n        {\n            col.a *= clamp(edge / Feather, 0.0, 1.0);\n        }\n    }\n\n    if (Show_Grid && Grid_Opacity > 0.001)\n    {\n        float lineDist = 1000.0;\n\n        for (int hr = 0; hr < 6; hr++)\n        {\n            for (int hc = 0; hc < 5; hc++)\n            {\n                if (hr < rows && hc < cols - 1)\n                {\n                    int a = hr * 6 + hc;\n                    lineDist = min(lineDist, segDist(p, apt[a], apt[a + 1]));\n                }\n            }\n        }\n\n        for (int vc = 0; vc < 6; vc++)\n        {\n            for (int vr = 0; vr < 5; vr++)\n            {\n                if (vc < cols && vr < rows - 1)\n                {\n                    int a2 = vr * 6 + vc;\n                    lineDist = min(lineDist, segDist(p, apt[a2], apt[a2 + 6]));\n                }\n            }\n        }\n\n        float pointDist = 1000.0;\n        for (int pr = 0; pr < 6; pr++)\n        {\n            for (int pc = 0; pc < 6; pc++)\n            {\n                if (pr < rows && pc < cols)\n                {\n                    pointDist = min(pointDist, length(p - apt[pr * 6 + pc]));\n                }\n            }\n        }\n\n        float lineA = (1.0 - smoothstep(0.0015, 0.005, lineDist)) * Grid_Opacity;\n        float pointA = (1.0 - smoothstep(0.006, 0.013, pointDist)) * Grid_Opacity;\n\n        col.rgb = lerp(col.rgb, float3(1.0, 0.15, 0.05), lineA);\n        col.a = max(col.a, lineA);\n        col.rgb = lerp(col.rgb, float3(1.0, 0.85, 0.1), pointA);\n        col.a = max(col.a, pointA);\n    }\n\n    return col;\n}\n";
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function fmt(v) { return Number(v.toFixed(6)).toString(); }
+
+function identityPoints(c, r) {
+  const out = [];
+  for (let y = 0; y < r; y++) {
+    for (let x = 0; x < c; x++) {
+      out.push({ x: c === 1 ? 0 : x / (c - 1), y: r === 1 ? 0 : y / (r - 1) });
+    }
+  }
+  return out;
+}
+
+function samplePointGrid(grid, oc, orr, u, v) {
+  const gx = clamp(u, 0, 1) * (oc - 1);
+  const gy = clamp(v, 0, 1) * (orr - 1);
+  const x0 = Math.min(oc - 2, Math.floor(gx));
+  const y0 = Math.min(orr - 2, Math.floor(gy));
+  const x1 = x0 + 1;
+  const y1 = y0 + 1;
+  const tx = gx - x0;
+  const ty = gy - y0;
+  const p00 = grid[y0 * oc + x0];
+  const p10 = grid[y0 * oc + x1];
+  const p01 = grid[y1 * oc + x0];
+  const p11 = grid[y1 * oc + x1];
+  return {
+    x: (p00.x * (1 - tx) + p10.x * tx) * (1 - ty) + (p01.x * (1 - tx) + p11.x * tx) * ty,
+    y: (p00.y * (1 - tx) + p10.y * tx) * (1 - ty) + (p01.y * (1 - tx) + p11.y * tx) * ty
+  };
+}
+
+function crossZ(ax, ay, bx, by) {
+  return ax * by - ay * bx;
+}
+
+function cellIsValid(d00, d10, d11, d01) {
+  const crosses = [
+    crossZ(d10.x - d00.x, d10.y - d00.y, d11.x - d10.x, d11.y - d10.y),
+    crossZ(d11.x - d10.x, d11.y - d10.y, d01.x - d11.x, d01.y - d11.y),
+    crossZ(d01.x - d11.x, d01.y - d11.y, d00.x - d01.x, d00.y - d01.y),
+    crossZ(d00.x - d01.x, d00.y - d01.y, d10.x - d00.x, d10.y - d00.y)
+  ];
+  return crosses.every((v) => v > 0.000001) || crosses.every((v) => v < -0.000001);
+}
+
+function invalidCellKeys() {
+  const bad = [];
+  for (let r = 0; r < rows - 1; r++) {
+    for (let c = 0; c < cols - 1; c++) {
+      const i = r * cols + c;
+      if (!cellIsValid(pts[i], pts[i + 1], pts[i + cols + 1], pts[i + cols])) bad.push(r + ',' + c);
+    }
+  }
+  return bad;
+}
+
+function meshIsValid() {
+  return invalidCellKeys().length === 0;
+}
+
+function snapshotPoints() {
+  return pts.map((p) => ({ x: p.x, y: p.y }));
+}
+
+function guardFold(before) {
+  if (preventFoldEl && preventFoldEl.checked && !meshIsValid()) {
+    pts = before;
+    dragWarning = 'That move would fold a cell, so it was blocked.';
+    return false;
+  }
+  dragWarning = '';
+  return true;
+}
+
+function setGrid(nextCols, nextRows, keepShape = true) {
+  const oldPts = pts;
+  const oldCols = cols;
+  const oldRows = rows;
+  cols = nextCols;
+  rows = nextRows;
+  if (!keepShape || !oldPts.length) {
+    pts = identityPoints(cols, rows);
+  } else {
+    const next = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        next.push(samplePointGrid(oldPts, oldCols, oldRows, c / (cols - 1), r / (rows - 1)));
+      }
+    }
+    pts = next;
+  }
+  selected = -1;
+  dragging = -1;
+  syncPointInputs();
+  requestRender();
+}
+
+function isBoundaryIndex(index) {
+  if (index < 0 || cols < 2 || rows < 2) return false;
+  const r = Math.floor(index / cols);
+  const c = index % cols;
+  return r === 0 || c === 0 || r === rows - 1 || c === cols - 1;
+}
+
+function smoothInteriorPoints() {
+  if (cols < 3 || rows < 3 || pts.length !== cols * rows) return;
+  const old = pts.map((p) => ({ x: p.x, y: p.y }));
+  const c00 = old[0];
+  const c10 = old[cols - 1];
+  const c01 = old[(rows - 1) * cols];
+  const c11 = old[rows * cols - 1];
+  for (let r = 1; r < rows - 1; r++) {
+    for (let c = 1; c < cols - 1; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      const top = samplePointGrid(old, cols, rows, u, 0);
+      const bottom = samplePointGrid(old, cols, rows, u, 1);
+      const left = samplePointGrid(old, cols, rows, 0, v);
+      const right = samplePointGrid(old, cols, rows, 1, v);
+      const bx = (c00.x * (1 - u) + c10.x * u) * (1 - v) + (c01.x * (1 - u) + c11.x * u) * v;
+      const by = (c00.y * (1 - u) + c10.y * u) * (1 - v) + (c01.y * (1 - u) + c11.y * u) * v;
+      pts[r * cols + c] = {
+        x: top.x * (1 - v) + bottom.x * v + left.x * (1 - u) + right.x * u - bx,
+        y: top.y * (1 - v) + bottom.y * v + left.y * (1 - u) + right.y * u - by
+      };
+    }
+  }
+}
+
+function flattenToCorners() {
+  if (cols < 2 || rows < 2 || pts.length !== cols * rows) return;
+  const c00 = pts[0];
+  const c10 = pts[cols - 1];
+  const c01 = pts[(rows - 1) * cols];
+  const c11 = pts[rows * cols - 1];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if ((r === 0 || r === rows - 1) && (c === 0 || c === cols - 1)) continue;
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      pts[r * cols + c] = {
+        x: (c00.x * (1 - u) + c10.x * u) * (1 - v) + (c01.x * (1 - u) + c11.x * u) * v,
+        y: (c00.y * (1 - u) + c10.y * u) * (1 - v) + (c01.y * (1 - u) + c11.y * u) * v
+      };
+    }
+  }
+}
+
+function maybeSmoothInterior(index) {
+  if (smoothInteriorEl && smoothInteriorEl.checked && isBoundaryIndex(index)) {
+    smoothInteriorPoints();
+  }
+}
+
+function drawPattern() {
+  const w = srcCanvas.width;
+  const h = srcCanvas.height;
+  const grad = sctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, '#f6d365');
+  grad.addColorStop(0.45, '#4facfe');
+  grad.addColorStop(1, '#43e97b');
+  sctx.fillStyle = grad;
+  sctx.fillRect(0, 0, w, h);
+
+  const cell = 80;
+  for (let y = 0; y < h / cell; y++) {
+    for (let x = 0; x < w / cell; x++) {
+      if ((x + y) % 2 === 0) {
+        sctx.fillStyle = 'rgba(0,0,0,0.16)';
+        sctx.fillRect(x * cell, y * cell, cell, cell);
+      }
+    }
+  }
+
+  sctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  sctx.lineWidth = 3;
+  for (let i = 0; i <= 8; i++) {
+    sctx.beginPath(); sctx.moveTo(i * w / 8, 0); sctx.lineTo(i * w / 8, h); sctx.stroke();
+    sctx.beginPath(); sctx.moveTo(0, i * h / 8); sctx.lineTo(w, i * h / 8); sctx.stroke();
+  }
+
+  sctx.fillStyle = 'rgba(0,0,0,0.55)';
+  sctx.beginPath(); sctx.arc(w * 0.5, h * 0.5, 150, 0, Math.PI * 2); sctx.fill();
+  sctx.fillStyle = '#fff';
+  sctx.font = 'bold 64px sans-serif';
+  sctx.textAlign = 'center';
+  sctx.fillText('MESH WARP', w / 2, h / 2 - 8);
+  sctx.font = 'bold 30px sans-serif';
+  sctx.fillText('drag the points', w / 2, h / 2 + 42);
+  sctx.font = 'bold 34px sans-serif';
+  sctx.fillText('TL', 60, 55);
+  sctx.fillText('TR', w - 60, 55);
+  sctx.fillText('BL', 60, h - 35);
+  sctx.fillText('BR', w - 60, h - 35);
+  srcData = sctx.getImageData(0, 0, w, h);
+}
+
+function screenFromUV(x, y) {
+  return [
+    (x - VIEW_MIN) / VIEW_RANGE * W,
+    (y - VIEW_MIN) / VIEW_RANGE * H
+  ];
+}
+
+function uvFromEvent(ev) {
+  const rect = stage.getBoundingClientRect();
+  const px = (ev.clientX - rect.left) * W / rect.width;
+  const py = (ev.clientY - rect.top) * H / rect.height;
+  return [
+    VIEW_MIN + px / W * VIEW_RANGE,
+    VIEW_MIN + py / H * VIEW_RANGE,
+    px,
+    py
+  ];
+}
+
+function cross(a, b) { return a.x * b.y - a.y * b.x; }
+function sub(a, b) { return { x: a.x - b.x, y: a.y - b.y }; }
+function add(a, b) { return { x: a.x + b.x, y: a.y + b.y }; }
+function mul(a, k) { return { x: a.x * k, y: a.y * k }; }
+
+function bilinearRoot(e, b, c, d, s) {
+  if (s < -0.0001 || s > 1.0001) return null;
+  const denom = add(c, mul(d, s));
+  const rest = sub(e, mul(b, s));
+  let t;
+  if (Math.abs(denom.x) > Math.abs(denom.y)) {
+    if (Math.abs(denom.x) < 1e-8) return null;
+    t = rest.x / denom.x;
+  } else {
+    if (Math.abs(denom.y) < 1e-8) return null;
+    t = rest.y / denom.y;
+  }
+  if (t < -0.0001 || t > 1.0001) return null;
+  return [clamp(s, 0, 1), clamp(t, 0, 1)];
+}
+
+function bilinearInverse(px, py, d00, d10, d01, d11) {
+  const b = sub(d10, d00);
+  const c = sub(d01, d00);
+  const d = add(add(d00, mul(d10, -1)), add(mul(d01, -1), d11));
+  const e = { x: px - d00.x, y: py - d00.y };
+  const A = -cross(b, d);
+  const B = cross(e, d) - cross(b, c);
+  const C = cross(e, c);
+  let candidates;
+  if (Math.abs(A) < 1e-8) {
+    if (Math.abs(B) < 1e-8) return null;
+    candidates = [-C / B];
+  } else {
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) return null;
+    const sq = Math.sqrt(Math.max(disc, 0));
+    candidates = [(-B + sq) / (2 * A), (-B - sq) / (2 * A)];
+  }
+  for (const s of candidates) {
+    const hit = bilinearRoot(e, b, c, d, s);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function sampleSource(u, v, out, offset) {
+  const sw = srcData.width;
+  const sh = srcData.height;
+  const sd = srcData.data;
+  const x = clamp(u, 0, 1) * (sw - 1);
+  const y = clamp(v, 0, 1) * (sh - 1);
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(sw - 1, x0 + 1);
+  const y1 = Math.min(sh - 1, y0 + 1);
+  const tx = x - x0;
+  const ty = y - y0;
+  for (let ch = 0; ch < 3; ch++) {
+    const top = sd[(y0 * sw + x0) * 4 + ch] * (1 - tx) + sd[(y0 * sw + x1) * 4 + ch] * tx;
+    const bot = sd[(y1 * sw + x0) * 4 + ch] * (1 - tx) + sd[(y1 * sw + x1) * 4 + ch] * tx;
+    out[offset + ch] = top * (1 - ty) + bot * ty;
+  }
+  out[offset + 3] = 255;
+}
+
+function buildCells() {
+  const cells = [];
+  for (let r = 0; r < rows - 1; r++) {
+    for (let c = 0; c < cols - 1; c++) {
+      const i00 = r * cols + c;
+      const d00 = pts[i00];
+      const d10 = pts[i00 + 1];
+      const d01 = pts[i00 + cols];
+      const d11 = pts[i00 + cols + 1];
+      cells.push({
+        c, r, d00, d10, d01, d11,
+        minX: Math.min(d00.x, d10.x, d01.x, d11.x),
+        maxX: Math.max(d00.x, d10.x, d01.x, d11.x),
+        minY: Math.min(d00.y, d10.y, d01.y, d11.y),
+        maxY: Math.max(d00.y, d10.y, d01.y, d11.y)
+      });
+    }
+  }
+  return cells;
+}
+
+function render() {
+  needsRender = false;
+  if (!srcData) return;
+  const cells = buildCells();
+  const data = frame.data;
+  for (let y = 0; y < H; y++) {
+    const qy = VIEW_MIN + y / H * VIEW_RANGE;
+    for (let x = 0; x < W; x++) {
+      const qx = VIEW_MIN + x / W * VIEW_RANGE;
+      const offset = (y * W + x) * 4;
+      data[offset] = 12;
+      data[offset + 1] = 14;
+      data[offset + 2] = 18;
+      data[offset + 3] = 255;
+      for (const cell of cells) {
+        if (qx < cell.minX || qx > cell.maxX || qy < cell.minY || qy > cell.maxY) continue;
+        const hit = bilinearInverse(qx, qy, cell.d00, cell.d10, cell.d01, cell.d11);
+        if (hit) {
+          const su = (cell.c + hit[0]) / (cols - 1);
+          const sv = (cell.r + hit[1]) / (rows - 1);
+          sampleSource(su, sv, data, offset);
+          break;
+        }
+      }
+    }
+  }
+  ctx.putImageData(frame, 0, 0);
+  drawOverlay();
+  updateReadout();
+}
+
+function drawOverlay() {
+  const a = screenFromUV(0, 0);
+  const b = screenFromUV(1, 1);
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
+
+  if (showGridEl.checked) {
+    const bad = new Set(invalidCellKeys());
+    if (bad.size) {
+      ctx.fillStyle = 'rgba(255,0,0,0.20)';
+      for (let r = 0; r < rows - 1; r++) {
+        for (let c = 0; c < cols - 1; c++) {
+          if (!bad.has(r + ',' + c)) continue;
+          const i = r * cols + c;
+          const corners = [pts[i], pts[i + 1], pts[i + cols + 1], pts[i + cols]].map((p) => screenFromUV(p.x, p.y));
+          ctx.beginPath();
+          ctx.moveTo(corners[0][0], corners[0][1]);
+          for (let k = 1; k < corners.length; k++) ctx.lineTo(corners[k][0], corners[k][1]);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    }
+    ctx.strokeStyle = 'rgba(255,64,32,0.95)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols - 1; c++) {
+        const p1 = screenFromUV(pts[r * cols + c].x, pts[r * cols + c].y);
+        const p2 = screenFromUV(pts[r * cols + c + 1].x, pts[r * cols + c + 1].y);
+        ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]);
+      }
+    }
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < rows - 1; r++) {
+        const p1 = screenFromUV(pts[r * cols + c].x, pts[r * cols + c].y);
+        const p2 = screenFromUV(pts[(r + 1) * cols + c].x, pts[(r + 1) * cols + c].y);
+        ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]);
+      }
+    }
+    ctx.stroke();
+  }
+
+  for (let i = 0; i < pts.length; i++) {
+    const p = screenFromUV(pts[i].x, pts[i].y);
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], i === selected ? 8 : 6, 0, Math.PI * 2);
+    ctx.fillStyle = i === selected ? '#ffd21a' : '#ffe66d';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(40,20,0,0.8)';
+    ctx.stroke();
+  }
+}
+
+function pointLabel(i) {
+  const r = Math.floor(i / cols);
+  const c = i % cols;
+  return 'P' + r + c;
+}
+
+function syncPointInputs() {
+  if (selected < 0 || !pts[selected]) {
+    pointNameEl.textContent = 'Click a point.';
+    pointXEl.value = '';
+    pointYEl.value = '';
+    return;
+  }
+  const p = pts[selected];
+  pointNameEl.textContent = pointLabel(selected);
+  pointXEl.value = fmt(p.x);
+  pointYEl.value = fmt(p.y);
+}
+
+function updateReadout() {
+  let base = '';
+  if (selected >= 0 && pts[selected]) {
+    const p = pts[selected];
+    base = pointLabel(selected) + '  X ' + fmt(p.x) + '   Y ' + fmt(p.y) + '   ·   grid ' + cols + ' x ' + rows;
+  } else {
+    base = 'Grid ' + cols + ' x ' + rows + ' · drag a point.';
+  }
+  readoutEl.textContent = dragWarning ? dragWarning + ' · ' + base : base;
+}
+
+function requestRender() {
+  saveLocalPreset();
+  if (needsRender) return;
+  needsRender = true;
+  requestAnimationFrame(render);
+}
+
+function nearestPoint(px, py) {
+  let best = -1;
+  let bestDist = 20;
+  for (let i = 0; i < pts.length; i++) {
+    const p = screenFromUV(pts[i].x, pts[i].y);
+    const dist = Math.hypot(p[0] - px, p[1] - py);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best;
+}
+
+function moveSelectedTo(u, v) {
+  if (selected < 0) return;
+  const before = snapshotPoints();
+  let x = clamp(u, -0.5, 1.5);
+  let y = clamp(v, -0.5, 1.5);
+  if (snapEl.checked) {
+    x = Math.round(x * 100) / 100;
+    y = Math.round(y * 100) / 100;
+  }
+  pts[selected].x = x;
+  pts[selected].y = y;
+  maybeSmoothInterior(selected);
+  if (!guardFold(before)) {
+    syncPointInputs();
+    requestRender();
+    return;
+  }
+  syncPointInputs();
+  requestRender();
+  queueObsSettings(false);
+}
+
+stage.addEventListener('pointerdown', (ev) => {
+  const [u, v, px, py] = uvFromEvent(ev);
+  const hit = nearestPoint(px, py);
+  if (hit >= 0) {
+    selected = hit;
+    dragging = hit;
+    stage.setPointerCapture(ev.pointerId);
+    syncPointInputs();
+    requestRender();
+  }
+});
+
+stage.addEventListener('pointermove', (ev) => {
+  if (dragging < 0) return;
+  const [u, v] = uvFromEvent(ev);
+  selected = dragging;
+  moveSelectedTo(u, v);
+});
+
+function endDrag(ev) {
+  if (dragging >= 0) {
+    dragging = -1;
+    requestRender();
+  }
+}
+stage.addEventListener('pointerup', endDrag);
+stage.addEventListener('pointercancel', endDrag);
+
+colsEl.addEventListener('change', () => { setGrid(Number(colsEl.value), rows); noteManualGridChange(); });
+rowsEl.addEventListener('change', () => { setGrid(cols, Number(rowsEl.value)); noteManualGridChange(); });
+showGridEl.addEventListener('change', () => { requestRender(); queueObsSettings(true); });
+snapEl.addEventListener('change', () => { syncPointInputs(); requestRender(); });
+pointXEl.addEventListener('change', () => { if (selected >= 0) { const before = snapshotPoints(); pts[selected].x = clamp(Number(pointXEl.value), -0.5, 1.5); maybeSmoothInterior(selected); if (!guardFold(before)) { syncPointInputs(); requestRender(); return; } syncPointInputs(); requestRender(); queueObsSettings(true); } });
+pointYEl.addEventListener('change', () => { if (selected >= 0) { const before = snapshotPoints(); pts[selected].y = clamp(Number(pointYEl.value), -0.5, 1.5); maybeSmoothInterior(selected); if (!guardFold(before)) { syncPointInputs(); requestRender(); return; } syncPointInputs(); requestRender(); queueObsSettings(true); } });
+smoothNowEl.addEventListener('click', () => { const before = snapshotPoints(); smoothInteriorPoints(); if (!guardFold(before)) { syncPointInputs(); requestRender(); return; } syncPointInputs(); requestRender(); queueObsSettings(true); });
+flattenNowEl.addEventListener('click', () => { const before = snapshotPoints(); flattenToCorners(); if (!guardFold(before)) { syncPointInputs(); requestRender(); return; } dragWarning = 'Flattened to a single plane from the four corners.'; syncPointInputs(); requestRender(); queueObsSettings(true); });
+document.getElementById('reset').addEventListener('click', () => setGrid(cols, rows, false));
+
+imageFileEl.addEventListener('change', () => {
+  const file = imageFileEl.files && imageFileEl.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const w = srcCanvas.width;
+    const h = srcCanvas.height;
+    const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+    const dw = img.naturalWidth * scale;
+    const dh = img.naturalHeight * scale;
+    sctx.fillStyle = '#000';
+    sctx.fillRect(0, 0, w, h);
+    sctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    srcData = sctx.getImageData(0, 0, w, h);
+    URL.revokeObjectURL(url);
+    requestRender();
+  };
+  img.src = url;
+});
+
+let obsSocket = null;
+let obsIdentified = false;
+let obsReqSeq = 0;
+let obsSendTimer = null;
+let obsTargetKind = 'exact';
+const obsPending = new Map();
+
+function setObsStatus(text) {
+  obsStatusEl.textContent = text;
+}
+
+function bytesToBase64(bytes) {
+  let bin = '';
+  bytes.forEach((b) => { bin += String.fromCharCode(b); });
+  return btoa(bin);
+}
+
+async function sha256Base64(text) {
+  if (!window.crypto || !crypto.subtle) {
+    throw new Error('This browser cannot use the crypto API needed for OBS authentication.');
+  }
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return bytesToBase64(new Uint8Array(digest));
+}
+
+function currentFilterSettings() {
+  const settings = {};
+  settings.Show_Grid = showGridEl.checked;
+  settings.Grid_Opacity = showGridEl.checked ? 0.85 : 0.0;
+  if (obsTargetKind === 'flex') {
+    settings.Grid_Columns = cols;
+    settings.Grid_Rows = rows;
+    let idx = 0;
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        const p = samplePointGrid(pts, cols, rows, c / 5, r / 5);
+        settings['P' + r + c + '_X'] = Number(fmt(p.x));
+        settings['P' + r + c + '_Y'] = Number(fmt(p.y));
+        idx++;
+      }
+    }
+    return settings;
+  }
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const p = pts[r * cols + c];
+      settings['P' + r + c + '_X'] = Number(fmt(p.x));
+      settings['P' + r + c + '_Y'] = Number(fmt(p.y));
+    }
+  }
+  return settings;
+}
+
+function obsRequest(requestType, requestData = {}) {
+  return new Promise((resolve, reject) => {
+    if (!obsSocket || obsSocket.readyState !== WebSocket.OPEN || !obsIdentified) {
+      reject(new Error('OBS is not connected yet.'));
+      return;
+    }
+    const requestId = 'mesh-warp-' + (++obsReqSeq);
+    obsPending.set(requestId, { resolve, reject });
+    obsSocket.send(JSON.stringify({ op: 6, d: { requestType, requestId, requestData } }));
+    setTimeout(() => {
+      if (obsPending.has(requestId)) {
+        obsPending.delete(requestId);
+        reject(new Error('OBS request timed out.'));
+      }
+    }, 5000);
+  });
+}
+
+function setObsTarget(text) {
+  obsTargetEl.textContent = text;
+}
+
+function fillSelect(select, values, preferred) {
+  const old = select.value;
+  select.innerHTML = '';
+  values.forEach((value) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = value;
+    select.appendChild(opt);
+  });
+  if (values.includes(preferred)) select.value = preferred;
+  else if (values.includes(old)) select.value = old;
+  else if (values.length) select.value = values[0];
+}
+
+function noteManualGridChange() {
+  if (obsModeEl.value === 'flex') {
+    obsTargetKind = 'flex';
+    if (obsIdentified) {
+      setObsStatus('Sent the editor grid to OBS Flex.');
+      queueObsSettings(true);
+    }
+    return;
+  }
+  if (obsIdentified && obsTargetKind === 'exact') {
+    obsTargetKind = 'detached';
+    setObsStatus('Grid changed. Load the matching shader in OBS, then run auto-detect again.');
+    setObsTarget('Manual grid change · needs to match the OBS shader again.');
+  }
+}
+
+function applyGridAndPoints(nextCols, nextRows, nextPts) {
+  cols = nextCols;
+  rows = nextRows;
+  colsEl.value = String(nextCols);
+  rowsEl.value = String(nextRows);
+  pts = nextPts;
+  selected = -1;
+  dragging = -1;
+  syncPointInputs();
+  requestRender();
+}
+
+function numSetting(settings, key, fallback) {
+  const value = Number(settings && settings[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function hasPointSettings(settings) {
+  return Object.keys(settings || {}).some((key) => /^P\d\d_[XY]$/.test(key));
+}
+
+function applyObsSettings(sourceName, filterName, settings) {
+  settings = settings || {};
+  if (obsModeEl.value === 'flex' && settings.Grid_Columns === undefined && settings.Grid_Rows === undefined && hasPointSettings(settings) && (settings.P55_X !== undefined || settings.P50_X !== undefined || settings.P05_X !== undefined)) {
+    const master = identityPoints(6, 6);
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        const idx = r * 6 + c;
+        master[idx] = {
+          x: numSetting(settings, 'P' + r + c + '_X', master[idx].x),
+          y: numSetting(settings, 'P' + r + c + '_Y', master[idx].y)
+        };
+      }
+    }
+    const active = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        active.push(samplePointGrid(master, 6, 6, c / (cols - 1), r / (rows - 1)));
+      }
+    }
+    obsTargetKind = 'flex';
+    applyGridAndPoints(cols, rows, active);
+    setObsTarget('Auto-detected: ' + sourceName + ' / ' + filterName + ' · Flex (loaded OBS points)');
+    setObsStatus('Loaded points from OBS. Dragging now sends editor values to OBS.');
+    return true;
+  }
+  if (settings.Show_Grid !== undefined) showGridEl.checked = !!settings.Show_Grid;
+  else if (settings.Grid_Opacity !== undefined) showGridEl.checked = Number(settings.Grid_Opacity) > 0.001;
+  if (settings.Grid_Columns !== undefined || settings.Grid_Rows !== undefined) {
+    const gc = clamp(parseInt(settings.Grid_Columns, 10) || 4, 2, 6);
+    const gr = clamp(parseInt(settings.Grid_Rows, 10) || 4, 2, 6);
+    const master = identityPoints(6, 6);
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        const idx = r * 6 + c;
+        master[idx] = {
+          x: numSetting(settings, 'P' + r + c + '_X', master[idx].x),
+          y: numSetting(settings, 'P' + r + c + '_Y', master[idx].y)
+        };
+      }
+    }
+    const active = [];
+    for (let r = 0; r < gr; r++) {
+      for (let c = 0; c < gc; c++) {
+        active.push(samplePointGrid(master, 6, 6, c / (gc - 1), r / (gr - 1)));
+      }
+    }
+    obsTargetKind = 'flex';
+    applyGridAndPoints(gc, gr, active);
+    setObsTarget('Auto-detected: ' + sourceName + ' / ' + filterName + ' · Flex ' + gc + ' x ' + gr);
+    setObsStatus('Loaded grid and points from OBS.');
+    return true;
+  }
+
+  let maxR = -1;
+  let maxC = -1;
+  Object.keys(settings).forEach((key) => {
+    const m = key.match(/^P(\d)(\d)_[XY]$/);
+    if (m) {
+      maxR = Math.max(maxR, Number(m[1]));
+      maxC = Math.max(maxC, Number(m[2]));
+    }
+  });
+  if (maxR < 1 || maxC < 1 || !hasPointSettings(settings)) return false;
+
+  const nc = maxC + 1;
+  const nr = maxR + 1;
+  const nextPts = identityPoints(nc, nr);
+  for (let r = 0; r < nr; r++) {
+    for (let c = 0; c < nc; c++) {
+      const idx = r * nc + c;
+      nextPts[idx] = {
+        x: numSetting(settings, 'P' + r + c + '_X', nextPts[idx].x),
+        y: numSetting(settings, 'P' + r + c + '_Y', nextPts[idx].y)
+      };
+    }
+  }
+  obsTargetKind = 'exact';
+  applyGridAndPoints(nc, nr, nextPts);
+  setObsTarget('Auto-detected: ' + sourceName + ' / ' + filterName + ' · ' + nc + ' x ' + nr);
+  setObsStatus('Loaded grid and points from OBS.');
+  return true;
+}
+
+function filterKindOf(filter) {
+  return filter.filterKind || filter.filterKindId || filter.filterKindName || '';
+}
+
+function filterSettingsOf(filter) {
+  return (filter && (filter.filterSettings || filter.settings)) || {};
+}
+
+function isWarpShaderFilter(filter) {
+  const kind = String(filterKindOf(filter)).toLowerCase();
+  const settings = filterSettingsOf(filter);
+  return kind.includes('shader') || hasPointSettings(settings) || settings.Grid_Columns !== undefined || settings.Grid_Rows !== undefined || settings.shader_text !== undefined || settings.shader_file !== undefined || settings.from_file !== undefined;
+}
+
+async function listObsSources() {
+  const names = [];
+  try {
+    const data = await obsRequest('GetInputList', {});
+    (data.inputs || []).forEach((input) => { if (input.inputName && !names.includes(input.inputName)) names.push(input.inputName); });
+  } catch (e) {}
+  try {
+    const data = await obsRequest('GetSceneList', {});
+    (data.scenes || []).forEach((scene) => { if (scene.sceneName && !names.includes(scene.sceneName)) names.push(scene.sceneName); });
+  } catch (e) {}
+  return names;
+}
+
+async function listObsFilters(sourceName) {
+  const data = await obsRequest('GetSourceFilterList', { sourceName });
+  return data.filters || [];
+}
+
+async function loadFilterSettings(sourceName, filterName, fallbackSettings) {
+  try {
+    const data = await obsRequest('GetSourceFilter', { sourceName, filterName });
+    return data.filterSettings || data.settings || fallbackSettings || {};
+  } catch (e) {
+    return fallbackSettings || {};
+  }
+}
+
+async function refreshFiltersForSource(sourceName, preferredFilter) {
+  const filters = await listObsFilters(sourceName);
+  fillSelect(obsFilterEl, filters.map((f) => f.filterName).filter(Boolean), preferredFilter || 'User-defined shader');
+  return filters;
+}
+
+async function loadSelectedObsFilter() {
+  const sourceName = obsSourceEl.value;
+  const filterName = obsFilterEl.value;
+  if (!sourceName || !filterName) return;
+  const settings = await loadFilterSettings(sourceName, filterName, {});
+  if (!applyObsSettings(sourceName, filterName, settings)) {
+    if (filterName === 'User-defined shader') {
+      obsTargetKind = obsModeEl.value === 'exact' ? 'exact' : 'flex';
+      setObsTarget('Selected: ' + sourceName + ' / ' + filterName + ' · filter selected');
+      setObsStatus('Selected the filter. OBS settings could not be read, so dragging sends editor values.');
+      return;
+    }
+    setObsTarget('Selected: ' + sourceName + ' / ' + filterName + ' · Mesh warp points were not found.');
+    setObsStatus('No mesh warp points found on this filter.');
+  }
+}
+
+async function autoDetectObsTarget() {
+  setObsStatus('Looking for OBS sources and filters...');
+  const sources = await listObsSources();
+  if (!sources.length) {
+    setObsStatus('No OBS sources found.');
+    return;
+  }
+  fillSelect(obsSourceEl, sources, 'Video Capture Device');
+
+  for (const sourceName of sources) {
+    let filters = [];
+    try { filters = await listObsFilters(sourceName); } catch (e) { continue; }
+    const candidate = filters.find(isWarpShaderFilter) || filters.find((f) => f.filterName === 'User-defined shader');
+    if (candidate && candidate.filterName) {
+      obsSourceEl.value = sourceName;
+      fillSelect(obsFilterEl, filters.map((f) => f.filterName).filter(Boolean), candidate.filterName);
+      const settings = await loadFilterSettings(sourceName, candidate.filterName, filterSettingsOf(candidate));
+      if (obsModeEl.value === 'flex') {
+        if (applyObsSettings(sourceName, candidate.filterName, settings)) {
+          return;
+        }
+        obsTargetKind = 'flex';
+        setObsTarget('Auto-detected: ' + sourceName + ' / ' + candidate.filterName + ' · Flex (send on drag)');
+        setObsStatus('No loadable points in OBS, so connecting did not overwrite anything. Dragging sends editor values to OBS.');
+        return;
+      }
+      if (applyObsSettings(sourceName, candidate.filterName, settings)) {
+        return;
+      }
+      obsTargetKind = obsModeEl.value === 'exact' ? 'exact' : 'flex';
+      setObsTarget('Auto-detected: ' + sourceName + ' / ' + candidate.filterName + ' · filter selected');
+      setObsStatus('Found the filter. OBS settings could not be read, so dragging sends editor values.');
+      return;
+    }
+  }
+
+  await refreshFiltersForSource(obsSourceEl.value, obsFilterEl.value);
+  setObsTarget('Could not find a mesh warp filter automatically. Pick the source and filter manually.');
+  setObsStatus('Loaded the source/filter list. Select the mesh warp filter.');
+}
+
+function sendObsSettingsNow() {
+  if (!obsSocket || obsSocket.readyState !== WebSocket.OPEN || !obsIdentified) return;
+  if (obsTargetKind === 'detached') return;
+  obsRequest('SetSourceFilterSettings', {
+    sourceName: obsSourceEl.value,
+    filterName: obsFilterEl.value,
+    filterSettings: currentFilterSettings(),
+    overlay: true
+  }).catch((e) => {
+    setObsStatus('Could not apply to OBS: ' + e.message + ' · Check the source/filter and shader grid.');
+  });
+}
+
+function queueObsSettings(force) {
+  if (!obsIdentified || !obsSocket || obsSocket.readyState !== WebSocket.OPEN) return;
+  if (obsTargetKind === 'detached') return;
+  if (!force && !obsLiveEl.checked) return;
+  if (obsSendTimer) return;
+  obsSendTimer = setTimeout(() => {
+    obsSendTimer = null;
+    sendObsSettingsNow();
+  }, force ? 0 : 35);
+}
+
+async function handleObsHello(hello) {
+  const identify = { rpcVersion: 1, eventSubscriptions: 0 };
+  const auth = hello.authentication;
+  if (auth && auth.challenge && auth.salt) {
+    const password = obsPasswordEl.value;
+    if (!password) {
+      setObsStatus('OBS requires a password. Enter the OBS WebSocket password.');
+      return;
+    }
+    const secret = await sha256Base64(password + auth.salt);
+    identify.authentication = await sha256Base64(secret + auth.challenge);
+  }
+  obsSocket.send(JSON.stringify({ op: 1, d: identify }));
+}
+
+function connectObs() {
+  if (obsSocket && obsSocket.readyState === WebSocket.OPEN) {
+    obsSocket.close();
+    return;
+  }
+  const url = obsUrlEl.value.trim() || 'ws://127.0.0.1:4455';
+  setObsStatus('Connecting to OBS...');
+  obsIdentified = false;
+  try {
+    obsSocket = new WebSocket(url, 'obswebsocket.json');
+  } catch (e) {
+    setObsStatus('Connection failed: ' + e.message);
+    return;
+  }
+
+  obsSocket.addEventListener('open', () => {
+    setObsStatus('Connected to OBS. Authenticating...');
+    obsConnectEl.textContent = 'Disconnect OBS';
+  });
+
+  obsSocket.addEventListener('message', async (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.op === 0 && msg.d) {
+      try {
+        await handleObsHello(msg.d);
+      } catch (e) {
+        setObsStatus('Authentication failed: ' + e.message);
+      }
+    } else if (msg.op === 2) {
+      obsIdentified = true;
+      setObsStatus('Connected to OBS. Auto-detecting source, filter, and grid...');
+      autoDetectObsTarget().catch((e) => setObsStatus('Auto-detect failed: ' + e.message));
+    } else if (msg.op === 7 && msg.d && msg.d.requestId) {
+      const pending = obsPending.get(msg.d.requestId);
+      if (pending) {
+        obsPending.delete(msg.d.requestId);
+        if (msg.d.requestStatus && msg.d.requestStatus.result) pending.resolve(msg.d.responseData || {});
+        else pending.reject(new Error((msg.d.requestStatus && msg.d.requestStatus.comment) || 'OBS request failed.'));
+      }
+    }
+  });
+
+  obsSocket.addEventListener('close', () => {
+    obsIdentified = false;
+    obsConnectEl.textContent = 'Connect to OBS';
+    setObsStatus('OBS disconnected.');
+  });
+
+  obsSocket.addEventListener('error', () => {
+    setObsStatus('Could not connect to OBS. Check that the OBS WebSocket server is enabled.');
+  });
+}
+
+obsConnectEl.addEventListener('click', connectObs);
+obsPushEl.addEventListener('click', () => queueObsSettings(true));
+obsLiveEl.addEventListener('change', () => { if (obsLiveEl.checked) queueObsSettings(true); });
+obsModeEl.addEventListener('change', () => {
+  if (obsModeEl.value === 'flex') {
+    obsTargetKind = 'flex';
+    setObsTarget('Flex mode · sends the editor grid only while dragging.');
+    setObsStatus('Flex mode. Connecting alone does not overwrite OBS values.');
+  } else if (obsIdentified) {
+    autoDetectObsTarget().catch((e) => setObsStatus('Auto-detect failed: ' + e.message));
+  }
+});
+obsRefreshEl.addEventListener('click', () => { if (obsIdentified) autoDetectObsTarget().catch((e) => setObsStatus('Auto-detect failed: ' + e.message)); else connectObs(); });
+obsSourceEl.addEventListener('change', async () => { try { await refreshFiltersForSource(obsSourceEl.value, obsFilterEl.value); await loadSelectedObsFilter(); } catch (e) { setObsStatus('Could not load the filter list: ' + e.message); } });
+obsFilterEl.addEventListener('change', () => { loadSelectedObsFilter().catch((e) => setObsStatus('Could not load filter settings: ' + e.message)); });
+
+
+const PRESET_KEY = 'meshWarpFlexPresetV1';
+
+function currentPreset() {
+  return {
+    app: 'obs-mesh-warp-flex',
+    version: 1,
+    cols,
+    rows,
+    showGrid: showGridEl.checked,
+    pts: pts.map((p) => ({ x: Number(fmt(p.x)), y: Number(fmt(p.y)) }))
+  };
+}
+
+function saveLocalPreset() {
+  try { localStorage.setItem(PRESET_KEY, JSON.stringify(currentPreset())); } catch (e) {}
+}
+
+function applyPreset(data) {
+  if (!data || !Array.isArray(data.pts)) return false;
+  const nc = clamp(parseInt(data.cols, 10) || 4, 2, 6);
+  const nr = clamp(parseInt(data.rows, 10) || 4, 2, 6);
+  if (data.pts.length !== nc * nr) return false;
+  cols = nc;
+  rows = nr;
+  colsEl.value = String(nc);
+  rowsEl.value = String(nr);
+  pts = data.pts.map((p) => ({ x: clamp(Number(p && p.x) || 0, -0.5, 1.5), y: clamp(Number(p && p.y) || 0, -0.5, 1.5) }));
+  selected = -1;
+  dragging = -1;
+  if (typeof data.showGrid === 'boolean') showGridEl.checked = data.showGrid;
+  syncPointInputs();
+  requestRender();
+  queueObsSettings(true);
+  return true;
+}
+
+function loadLocalPreset() {
+  try {
+    const raw = localStorage.getItem(PRESET_KEY);
+    if (raw) applyPreset(JSON.parse(raw));
+  } catch (e) {}
+}
+
+function buildFlexShaderWithCurrentValues() {
+  let text = FLEX_SHADER_TEXT;
+  text = text.replace(/(uniform int Grid_Columns<[\s\S]*?> = )4;/, '$1' + cols + ';');
+  text = text.replace(/(uniform int Grid_Rows<[\s\S]*?> = )4;/, '$1' + rows + ';');
+  text = text.replace(/(uniform bool Show_Grid<[\s\S]*?> = )(true|false);/, '$1' + (showGridEl.checked ? 'true' : 'false') + ';');
+  text = text.replace(/(uniform float Grid_Opacity<[\s\S]*?> = )[0-9.]+;/, '$1' + (showGridEl.checked ? '0.85' : '0.0') + ';');
+  for (let r = 0; r < 6; r++) {
+    for (let c = 0; c < 6; c++) {
+      const p = samplePointGrid(pts, cols, rows, c / 5, r / 5);
+      const name = 'P' + r + c;
+      const reX = new RegExp('(uniform float ' + name + '_X<[^>]*> = )[-0-9.]+;');
+      const reY = new RegExp('(uniform float ' + name + '_Y<[^>]*> = )[-0-9.]+;');
+      text = text.replace(reX, '$1' + fmt(p.x) + ';');
+      text = text.replace(reY, '$1' + fmt(p.y) + ';');
+    }
+  }
+  return text;
+}
+
+function shaderPointUniforms() {
+  const lines = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const p = pts[r * cols + c];
+      const name = 'P' + r + c;
+      lines.push('uniform float ' + name + '_X< string label = "' + name + ' X"; string widget_type = "slider"; string group = "Points row ' + r + '"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = ' + fmt(p.x) + ';');
+      lines.push('uniform float ' + name + '_Y< string label = "' + name + ' Y"; string widget_type = "slider"; string group = "Points row ' + r + '"; float minimum = -0.5; float maximum = 1.5; float step = 0.001; > = ' + fmt(p.y) + ';');
+    }
+  }
+  return lines.join('\n');
+}
+
+function buildShader() {
+  const lines = [];
+  lines.push('// Mesh warp generated by Mesh Warp Drag Editor. Inverse bilinear cells: no diagonal seam.');
+  lines.push('uniform bool Show_Grid< string label = "Show grid"; string group = "Guide"; > = true;');
+  lines.push('uniform float Grid_Opacity< string label = "Grid opacity"; string widget_type = "slider"; string group = "Guide"; float minimum = 0.0; float maximum = 1.0; float step = 0.01; > = 0.85;');
+  lines.push('uniform float Feather< string label = "Edge feather"; string widget_type = "slider"; string group = "Guide"; float minimum = 0.0; float maximum = 0.05; float step = 0.0005; > = 0.0;');
+  lines.push(shaderPointUniforms());
+  lines.push('');
+  lines.push('float segDist(float2 p, float2 a, float2 b) { float2 pa = p - a; float2 ba = b - a; float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.00000001), 0.0, 1.0); return length(pa - ba * h); }');
+  lines.push('float cross2(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }');
+  lines.push('bool bilinearRoot(float2 e, float2 b, float2 c, float2 d, float s, out float tOut) { tOut = 0.0; if (s < -0.0001 || s > 1.0001) return false; float2 denom = c + d * s; float2 rest = e - b * s; float dd = dot(denom, denom); if (dd < 0.00000001) return false; tOut = dot(rest, denom) / dd; if (tOut < -0.0001 || tOut > 1.0001) return false; float2 residual = rest - denom * tOut; return dot(residual, residual) < 0.0001; }');
+  lines.push('bool bilinearInverse(float2 p, float2 d00, float2 d10, float2 d01, float2 d11, out float sOut, out float tOut) { sOut = 0.0; tOut = 0.0; float2 b = d10 - d00; float2 c = d01 - d00; float2 d = d00 - d10 - d01 + d11; float2 e = p - d00; float A = -cross2(b, d); float B = cross2(e, d) - cross2(b, c); float C = cross2(e, c); if (abs(A) < 0.00000001) { if (abs(B) < 0.00000001) return false; float sLin = -C / B; float tLin; if (bilinearRoot(e, b, c, d, sLin, tLin)) { sOut = clamp(sLin, 0.0, 1.0); tOut = clamp(tLin, 0.0, 1.0); return true; } return false; } float disc = B * B - 4.0 * A * C; if (disc < 0.0) return false; float sq = sqrt(max(disc, 0.0)); float invDen = 1.0 / (2.0 * A); float s1 = (-B + sq) * invDen; float t1; if (bilinearRoot(e, b, c, d, s1, t1)) { sOut = clamp(s1, 0.0, 1.0); tOut = clamp(t1, 0.0, 1.0); return true; } float s2 = (-B - sq) * invDen; float t2; if (bilinearRoot(e, b, c, d, s2, t2)) { sOut = clamp(s2, 0.0, 1.0); tOut = clamp(t2, 0.0, 1.0); return true; } return false; }');
+  lines.push('float4 mainImage(VertData v_in) : TARGET {');
+  lines.push('    float2 p = v_in.uv;');
+  lines.push('    float2 pts[' + (cols * rows) + '];');
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      lines.push('    pts[' + idx + '] = float2(P' + r + c + '_X, P' + r + c + '_Y);');
+    }
+  }
+  lines.push('    float2 src = float2(0.0, 0.0); float edge = 1.0; bool found = false;');
+  lines.push('    for (int r = 0; r < ' + (rows - 1) + '; r++) {');
+  lines.push('        for (int c = 0; c < ' + (cols - 1) + '; c++) {');
+  lines.push('            int i00 = r * ' + cols + ' + c; int i10 = i00 + 1; int i01 = i00 + ' + cols + '; int i11 = i01 + 1;');
+  lines.push('            float2 d00 = pts[i00]; float2 d10 = pts[i10]; float2 d01 = pts[i01]; float2 d11 = pts[i11];');
+  lines.push('            float x0 = float(c) / float(' + (cols - 1) + '); float x1 = float(c + 1) / float(' + (cols - 1) + '); float y0 = float(r) / float(' + (rows - 1) + '); float y1 = float(r + 1) / float(' + (rows - 1) + ');');
+  lines.push('            float s; float t; if (!found && bilinearInverse(p, d00, d10, d01, d11, s, t)) { src = float2(lerp(x0, x1, s), lerp(y0, y1, t)); edge = min(edge, min(min(s, t), min(1.0 - s, 1.0 - t))); found = true; }');
+  lines.push('        }');
+  lines.push('    }');
+  lines.push('    float4 col = float4(0.0, 0.0, 0.0, 0.0);');
+  lines.push('    if (found) { col = image.SampleLevel(textureSampler, clamp(src, 0.0, 1.0), 0.0); if (Feather > 0.00001) col.a *= clamp(edge / Feather, 0.0, 1.0); }');
+  lines.push('    if (Show_Grid && Grid_Opacity > 0.001) { float lineDist = 1000.0;');
+  lines.push('        for (int gr = 0; gr < ' + rows + '; gr++) for (int gc = 0; gc < ' + (cols - 1) + '; gc++) { int a = gr * ' + cols + ' + gc; lineDist = min(lineDist, segDist(p, pts[a], pts[a + 1])); }');
+  lines.push('        for (int gc2 = 0; gc2 < ' + cols + '; gc2++) for (int gr2 = 0; gr2 < ' + (rows - 1) + '; gr2++) { int a2 = gr2 * ' + cols + ' + gc2; lineDist = min(lineDist, segDist(p, pts[a2], pts[a2 + ' + cols + '])); }');
+  lines.push('        float pointDist = 1000.0; for (int i = 0; i < ' + (cols * rows) + '; i++) pointDist = min(pointDist, length(p - pts[i]));');
+  lines.push('        float lineA = (1.0 - smoothstep(0.0015, 0.005, lineDist)) * Grid_Opacity; float pointA = (1.0 - smoothstep(0.006, 0.013, pointDist)) * Grid_Opacity;');
+  lines.push('        col.rgb = lerp(col.rgb, float3(1.0, 0.15, 0.05), lineA); col.a = max(col.a, lineA); col.rgb = lerp(col.rgb, float3(1.0, 0.85, 0.1), pointA); col.a = max(col.a, pointA); }');
+  lines.push('    return col;');
+  lines.push('}');
+  return lines.join('\n');
+}
+
+
+presetSaveEl.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(currentPreset(), null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mesh-warp-preset-' + cols + 'x' + rows + '.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+  readoutEl.textContent = 'Saved the current values as JSON.';
+});
+
+presetLoadEl.addEventListener('click', () => presetFileEl.click());
+presetFileEl.addEventListener('change', () => {
+  const file = presetFileEl.files && presetFileEl.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      if (!applyPreset(JSON.parse(String(reader.result || '{}')))) {
+        readoutEl.textContent = 'That JSON is not a mesh warp preset.';
+      }
+    } catch (e) {
+      readoutEl.textContent = 'Could not read that JSON.';
+    }
+    presetFileEl.value = '';
+  };
+  reader.readAsText(file);
+});
+
+document.getElementById('download').addEventListener('click', () => {
+  const blob = new Blob([buildFlexShaderWithCurrentValues()], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mesh-warp-flex.shader';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+  obsTargetKind = 'flex';
+  setObsTarget('Flex shader · load mesh-warp-flex.shader in OBS.');
+  setObsStatus('Downloaded the Flex shader with the current values baked in.');
+});
+
+document.getElementById('copy').addEventListener('click', async () => {
+  const lines = ['Grid ' + cols + ' x ' + rows];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const p = pts[r * cols + c];
+      lines.push('P' + r + c + '_X = ' + fmt(p.x));
+      lines.push('P' + r + c + '_Y = ' + fmt(p.y));
+    }
+  }
+  const text = lines.join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    readoutEl.textContent = 'Point values copied.';
+  } catch (e) {
+    prompt('Copy these values.', text);
+  }
+});
+
+drawPattern();
+setGrid(4, 4, false);
+loadLocalPreset();
+render();
+</script>
+</body>
+</html>
